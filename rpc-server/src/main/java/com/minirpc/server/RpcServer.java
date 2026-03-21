@@ -40,6 +40,7 @@ public class RpcServer {
             byte[] requestBytes = RpcIO.readFrame(socket.getInputStream());
             RpcRequest request = (RpcRequest) RpcMessageCodec.decode(requestBytes);
 
+            System.out.println("requestId:"+ request.getRequestId());
             // 2) 调用本地服务实现，生成 RpcResponse。
             RpcResponse response = invoke(request);
             // 3) 把响应编码并回写给客户端。
@@ -62,9 +63,12 @@ public class RpcServer {
             }
             // 用“方法名 + 参数类型”精确定位目标方法，支持方法重载场景。
             Method method = service.getClass().getMethod(request.getMethodName(), request.getParameterTypes());
+
+            System.out.println("methodName:" + method.getName());
             // 反射执行真实业务方法。
-            Object result = method.invoke(service, request.getArgs());
-            response.setData(result);
+            Object result = method.invoke(service, request.getArgs());//真正执行这个方法
+            response.setData(result);// result 实际就是字符串。 result = 远程方法真正执行后的返回值，只是被统一装进 Object 里传输。
+            System.out.println("result的类型:" + result.getClass());
             return response;
         } catch (Exception e) {
             // 出错时把错误信息写入响应，让客户端感知远端异常。

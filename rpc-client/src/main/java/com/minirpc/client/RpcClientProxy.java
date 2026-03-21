@@ -28,6 +28,9 @@ public class RpcClientProxy {
             request.setParameterTypes(method.getParameterTypes());
             request.setArgs(args);
 
+            System.out.println("requestId:" + request.getRequestId());
+            System.out.println("methodName:" + method.getName());
+
             // 2) 发起远程请求并阻塞等待响应。
             RpcResponse response = rpcClient.sendRequest(request);
             // 3) 把服务端错误转换为本地异常，保证调用方能感知失败。
