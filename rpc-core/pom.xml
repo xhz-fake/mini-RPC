@@ -11,4 +11,12 @@
 
     <artifactId>rpc-core</artifactId>
     <name>rpc-core</name>
+
+    <dependencies>
+        <dependency>
+            <groupId>io.netty</groupId>
+            <artifactId>netty-all</artifactId>
+            <version>${netty.version}</version>
+        </dependency>
+    </dependencies>
 </project>
