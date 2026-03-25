@@ -4,17 +4,25 @@ import com.minirpc.client.RpcClient;
 import com.minirpc.client.RpcClientProxy;
 import com.minirpc.demo.service.HelloService;
 
-public class ClientBootstrap {
+public class ClientBootstrap { // Day3 仍然只改通信治理
     public static void main(String[] args) {
-        // 1) 配置远程服务地址。当前 Day1 使用固定地址直连，后续才会替换成注册中心发现。
+        // 创建客户端通信组件：Day3 版本内部支持连接复用、请求超时和响应映射。
         RpcClient rpcClient = new RpcClient("127.0.0.1", 9000);
-        // 2) 创建代理工厂。它负责把“本地方法调用”转换为“远程请求”。
-        RpcClientProxy rpcClientProxy = new RpcClientProxy(rpcClient);
-        // 3) 生成 HelloService 代理对象。此时拿到的不是实现类，而是 JDK 动态代理对象。
-        HelloService helloService = rpcClientProxy.create(HelloService.class);
-        // 4) 看似本地调用，实际会进入 InvocationHandler，组装 RpcRequest 并发给服务端。
-        String result = helloService.hello("mini-RPC");
-        // 5) 服务端执行后返回结果，代理层把 RpcResponse.data 还原成方法返回值。
-        System.out.println("rpc result: " + result);
+        try {
+            // 代理层保持不变：业务代码依然通过接口方法发起调用。
+            RpcClientProxy rpcClientProxy = new RpcClientProxy(rpcClient);
+            HelloService helloService = rpcClientProxy.create(HelloService.class);// 代理对象：helloService
+            // 这里的 helloService 表面类型是 HelloService，但运行时真实对象其实是类似：$Proxy0 ; jdk.proxy1.$Proxy0
+            // 业务调用语义不变，通信治理能力由 RpcClient 内部增强。
+//            String result = helloService.hello("mini-RPC");
+//            System.out.println("rpc result: " + result);
+            String result1 = helloService.hello("mini-RPC-1"); // 表面上是调用 hello()，实际上是调用到了 代理类生成的 hello() 方法。
+            String result2 = helloService.hello("mini-RPC-2"); // 实际上是“把远程调用包装成本地调用的体验。”
+            System.out.println(result1);
+            System.out.println(result2);
+        } finally {
+            // 程序退出前主动释放连接与 Netty 线程资源。
+            rpcClient.shutdown();
+        }
     }
 }

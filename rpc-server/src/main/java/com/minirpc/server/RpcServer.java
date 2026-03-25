@@ -17,8 +17,8 @@ import io.netty.handler.codec.LengthFieldBasedFrameDecoder;
 import io.netty.handler.codec.LengthFieldPrepender;
 
 import java.lang.reflect.Method;
-
-public class RpcServer {
+// RpcServer 的核心职责是监听端口、接收请求、根据接口名和方法签名定位服务实现，通过反射执行业务方法，再把执行结果封装成响应返回给客户端。
+public class RpcServer {// 站在服务提供方视角，接收请求、找到目标服务、执行方法、返回结果，关心两件事：1.我监听哪个端口 2.我能提供哪些服务
     private final int port;
     private final ServiceRegistry serviceRegistry;
 
@@ -28,10 +28,9 @@ public class RpcServer {
     }
 
     public void start() {
-        // bossGroup 只负责“接入连接”，不做耗时业务处理。
-        EventLoopGroup bossGroup = new NioEventLoopGroup(1);
-        // workerGroup 负责读写 IO 与执行 ChannelHandler。
-        EventLoopGroup workerGroup = new NioEventLoopGroup();
+        EventLoopGroup bossGroup = new NioEventLoopGroup(1);// bossGroup 只负责“接入连接”，不做耗时业务处理。
+
+        EventLoopGroup workerGroup = new NioEventLoopGroup(); // workerGroup 负责读写 IO 与执行 ChannelHandler。
         try {
             // ServerBootstrap 是 Netty 服务端启动器。
             ServerBootstrap serverBootstrap = new ServerBootstrap();
@@ -46,17 +45,17 @@ public class RpcServer {
                         @Override
                         protected void initChannel(SocketChannel ch) {
                             ChannelPipeline pipeline = ch.pipeline();
-                            // 入站：先按长度拆出完整帧，防止粘包/半包。
+                            // 入站：先按长度拆出完整帧，防止粘包/半包。把 TCP 字节流切成完整帧
                             pipeline.addLast(new LengthFieldBasedFrameDecoder(10 * 1024 * 1024, 0, 4, 0, 4));
-                            // 入站：把字节帧转成 RpcRequest/RpcResponse 对象。
-                            pipeline.addLast(new RpcMessageDecoder());
+                            // 入站：把字节帧转成 RpcRequest/RpcResponse 对象，把完整帧字节反序列化成 Java 对象
+                            pipeline.addLast(new RpcMessageDecoder());// 这里就是服务端把网络字节真正“还原成 Java 对象”的地方。
 
                             // 出站：在消息体前追加 4 字节长度头。
                             pipeline.addLast(new LengthFieldPrepender(4));
                             // 出站：把对象编码成字节。
                             pipeline.addLast(new RpcMessageEncoder());
 
-                            // 业务处理器：执行 invoke 并回写响应。
+                            // 它的意思是：把 RpcServerRequestHandler 注册为这个连接上的一个入站处理器。
                             pipeline.addLast(new RpcServerRequestHandler(RpcServer.this));
                         }
                     });
