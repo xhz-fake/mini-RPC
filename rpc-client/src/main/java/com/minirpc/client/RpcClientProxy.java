@@ -16,7 +16,7 @@ public class RpcClientProxy {
     }
 
     @SuppressWarnings("unchecked")
-    public <T> T create(Class<T> interfaceClass) {
+    public <T> T create(Class<T> interfaceClass) {// 返回的是 JDK 动态代理对象
         // 这里定义“代理对象被调用时”要执行的逻辑。
         // 你每次调用 helloService.xxx(...)，都会先进入这个 handler。
         InvocationHandler handler = (Object proxy, Method method, Object[] args) -> {// 这三个参数不是你手动传的，是 JDK 动态代理在运行时自动传进来的。
@@ -28,7 +28,7 @@ public class RpcClientProxy {
             request.setMethodName(method.getName());
             request.setParameterTypes(method.getParameterTypes());
             request.setArgs(args);
-
+            // 这一步非常关键，因为它完成了：“方法调用” -> “可传输请求对象
             System.out.println("requestId:" + request.getRequestId());
             System.out.println("methodName:" + method.getName());
 

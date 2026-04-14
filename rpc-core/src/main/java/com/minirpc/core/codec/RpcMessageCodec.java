@@ -16,7 +16,7 @@ public final class RpcMessageCodec {
             // Day1 先使用 JDK 原生序列化，重点在“跑通链路”，后续再替换更高性能方案。
             oos.writeObject(obj);
             oos.flush();
-            return bos.toByteArray();
+            return bos.toByteArray();// 这一步之后，数据已经不再是 Java 对象形态了，而是：一串字节数组 byte[]
         } catch (IOException e) {
             throw new RuntimeException("编码失败", e);
         }

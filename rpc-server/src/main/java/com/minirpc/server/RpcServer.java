@@ -44,9 +44,9 @@ public class RpcServer {// 站在服务提供方视角，接收请求、找到�
                     .childHandler(new ChannelInitializer<SocketChannel>() {
                         @Override
                         protected void initChannel(SocketChannel ch) {
-                            ChannelPipeline pipeline = ch.pipeline();
+                            ChannelPipeline pipeline = ch.pipeline();// 服务端最先收到的是：TCP 字节流，也就是：[4字节长度][请求体字节]
                             // 入站：先按长度拆出完整帧，防止粘包/半包。把 TCP 字节流切成完整帧
-                            pipeline.addLast(new LengthFieldBasedFrameDecoder(10 * 1024 * 1024, 0, 4, 0, 4));
+                            pipeline.addLast(new LengthFieldBasedFrameDecoder(10 * 1024 * 1024, 0, 4, 0, 4));// 这是服务端把“字节流切成完整一帧”的地方。
                             // 入站：把字节帧转成 RpcRequest/RpcResponse 对象，把完整帧字节反序列化成 Java 对象
                             pipeline.addLast(new RpcMessageDecoder());// 这里就是服务端把网络字节真正“还原成 Java 对象”的地方。
 
@@ -86,7 +86,7 @@ public class RpcServer {// 站在服务提供方视角，接收请求、找到�
             // 用“方法名 + 参数类型”精确定位要执行的方法（支持重载）。
             Method method = service.getClass().getMethod(request.getMethodName(), request.getParameterTypes());// 服务端业务执行
             // 反射执行真实业务方法，args 就是客户端传来的实参。
-            Object result = method.invoke(service, request.getArgs());
+            Object result = method.invoke(service, request.getArgs());// - 用反射去真正执行目标方法，方法执行完后，把“返回值”接住
             // 把方法返回值写入响应体，供客户端恢复成本地返回值。
             response.setData(result);
             return response;

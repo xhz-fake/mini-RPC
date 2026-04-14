@@ -4,6 +4,10 @@ import com.minirpc.core.codec.netty.RpcMessageDecoder;
 import com.minirpc.core.codec.netty.RpcMessageEncoder;
 import com.minirpc.core.protocol.RpcRequest;
 import com.minirpc.core.protocol.RpcResponse;
+import com.minirpc.registry.LoadBalancer;
+import com.minirpc.registry.RandomLoadBalancer;
+import com.minirpc.registry.RegistryCenter;
+import com.minirpc.registry.ServiceInstance;
 import io.netty.bootstrap.Bootstrap;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelInitializer;
@@ -16,6 +20,10 @@ import io.netty.channel.socket.nio.NioSocketChannel;
 import io.netty.handler.codec.LengthFieldBasedFrameDecoder;
 import io.netty.handler.codec.LengthFieldPrepender;
 
+import java.net.InetSocketAddress;
+import java.net.SocketAddress;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
@@ -23,109 +31,131 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicLong;
-// RpcClient 的核心职责是维护连接、发送请求、按 requestId 关联响应，并处理超时、断连和连接复用等客户端治理问题
-public class RpcClient {// 站在调用方视角，把“本地方法调用请求”发出去，并把响应接回来, 关心的是“怎么把请求发出去，并把响应收回来”。
-    // 单条消息最大长度：10MB。防止恶意包或异常包导致内存被打爆。
+
+// RpcClient 的核心职责是维护连接、发送请求、按 requestId 关联响应，并处理超时、断连和连接复用等客户端治理问题。
+public class RpcClient {
     private static final int MAX_FRAME_LENGTH = 10 * 1024 * 1024;
-    // 请求等待响应的超时时间。默认 5 秒；调试时可通过 JVM 参数覆盖：
-    // -Drpc.client.timeout.seconds=120
     private static final long RESPONSE_TIMEOUT_SECONDS = Long.getLong("rpc.client.timeout.seconds", 5L);
-    // 断连时最多重连次数。
+    // Day4 最小可用重试次数：默认 2 次（首次 + 1 次重试）。
+    private static final int MAX_REQUEST_ATTEMPTS = Integer.getInteger("rpc.client.retry.maxAttempts", 2);// 去 JVM 的系统属性里查一个名字叫 rpc.client.retry.maxAttempts 的配置项，如果查到了，就把它转成 Integer；如果没查到，就用默认值 2
     private static final int MAX_RECONNECT_RETRIES = 3;
-    // 每次重连失败后的退避时间，避免瞬时重连风暴。
     private static final long RECONNECT_BACKOFF_MILLIS = 300;
 
-    private final String host;
-    private final int port;
+    private final String directHost;
+    private final int directPort;
     private final EventLoopGroup group;
-    private final Bootstrap bootstrap;// 客户端启动器和连接模板
+    private final Bootstrap bootstrap;
+    private final RegistryCenter registryCenter;
+    private final LoadBalancer loadBalancer;
 
-    // 核心映射：requestId -> future。并发场景下用来做请求响应精确配对。
-    private final Map<String, CompletableFuture<RpcResponse>> pendingRequests = new ConcurrentHashMap<>();// 挂起请求表，Day3 核心
-    private final RpcClientResponseHandler responseHandler;
-    private final Object connectLock = new Object();// 避免并发重复建连
+    // requestId -> PendingRequest。Day4 继续沿用 Day3 的 requestId 精准配对能力。
+    private final Map<String, PendingRequest> pendingRequests = new ConcurrentHashMap<>();
+    // endpoint(host:port) -> Channel。不同服务实例维护各自连接，便于连接复用。
+    private final Map<String, Channel> channels = new ConcurrentHashMap<>();// 与Day3不同(只有一个channel，即固定的服务端地址)，而此处的 channels 是一个 Map
+    // endpoint(host:port) -> lock。避免并发请求同时对同一实例重复建连。
+    private final Map<String, Object> connectLocks = new ConcurrentHashMap<>();
 
-    // 下面四个指标是 Day3 增加的统计指标，方便快速判断调用健康度。
     private final AtomicLong totalRequests = new AtomicLong();
     private final AtomicLong successRequests = new AtomicLong();
     private final AtomicLong failedRequests = new AtomicLong();
     private final AtomicLong timeoutRequests = new AtomicLong();
-    private volatile Channel channel;// 让多个线程读取 channel 时能看到“最新值”（可见性）
-    // 但它不保证复合操作原子性 ，所以代码里还需要 synchronized (connectLock) 配合。
 
     public RpcClient(String host, int port) {
-        this.host = host;
-        this.port = port;
-        // 客户端一个 event loop 线程先满足当前学习和 demo 场景。
-        this.group = new NioEventLoopGroup(1);// 只创建一次 Netty I/O 线程池
-        // 传入 markDisconnected 回调：当通道失效时把本地 channel 标记为空，便于后续触发重连。
-        this.responseHandler = new RpcClientResponseHandler(pendingRequests, this::markDisconnected);// 共享同一张表
+        this(host, port, null, new RandomLoadBalancer());
+    }
+
+    public RpcClient(RegistryCenter registryCenter, LoadBalancer loadBalancer) {
+        this(null, -1, registryCenter, loadBalancer);
+    }
+
+    private RpcClient(String directHost, int directPort, RegistryCenter registryCenter, LoadBalancer loadBalancer) {
+        this.directHost = directHost;
+        this.directPort = directPort;
+        this.registryCenter = registryCenter;
+        this.loadBalancer = loadBalancer == null ? new RandomLoadBalancer() : loadBalancer;
+        this.group = new NioEventLoopGroup(1);
         this.bootstrap = createBootstrap();
     }
 
     public RpcResponse sendRequest(RpcRequest request) {
-        // 1) 统计总请求量。
         totalRequests.incrementAndGet();
-        // 2) 每个请求先创建一个 future 放入映射表，再发请求。
-        // 这样即使响应非常快返回，也不会发生“响应先到但映射还没建立”的竞态问题。
-        CompletableFuture<RpcResponse> future = new CompletableFuture<>();
-        pendingRequests.put(request.getRequestId(), future);// 请求入映射表
-        try {
-            // 3) 确保连接可用（复用或重连）。
-            Channel activeChannel = ensureConnected();
-            // 4) 出站发送请求对象，Netty pipeline 会负责编码与封帧。
-            activeChannel.writeAndFlush(request).sync();// 发请求，把 RpcRequest 对象交给 Netty pipeline 出站。
-            // 5) 同步等待该 requestId 对应的 future 完成（由响应处理器回填）。
-            RpcResponse response = future.get(RESPONSE_TIMEOUT_SECONDS, TimeUnit.SECONDS);// 这句会一直等，直到有别的线程把 future 完成。即等待 future.complete(msg);
-            // 6) 统计成功。
-            successRequests.incrementAndGet();
-            return response;
-        } catch (TimeoutException e) {
-            // 超时后清理映射，避免内存泄漏。
-            pendingRequests.remove(request.getRequestId());
-            timeoutRequests.incrementAndGet();
-            failedRequests.incrementAndGet();
-            throw new RuntimeException("远程调用超时", e);
-        } catch (ExecutionException e) {
-            // 这里代表 future 被异常完成（如断连、handler 异常等）。
-            pendingRequests.remove(request.getRequestId());
-            failedRequests.incrementAndGet();
-            throw new RuntimeException("远程调用失败", e.getCause());
-        } catch (InterruptedException e) {
-            // 保留线程中断语义，避免吞掉中断信号。
-            pendingRequests.remove(request.getRequestId());
-            failedRequests.incrementAndGet();
-            Thread.currentThread().interrupt();
-            throw new RuntimeException("远程调用失败", e);
-        } catch (RuntimeException e) {
-            // 兜底分支，保证所有异常路径都做映射清理和失败计数。
-            pendingRequests.remove(request.getRequestId());
-            failedRequests.incrementAndGet();
-            throw e;
+        // 记录“这次请求已经尝试过哪些实例”。
+        // Day4 重试时要避开它们，尽量换一台机器再试。
+        List<ServiceInstance> triedInstances = new ArrayList<>();
+        RuntimeException lastFailure = null;
+        // 至少尝试 1 次；如果你在 VM options 里配置了更大的值，就按配置走。
+        int maxAttempts = Math.max(1, MAX_REQUEST_ATTEMPTS);
+        for (int attempt = 1; attempt <= maxAttempts; attempt++) {
+            // 先决定“这次请求准备打到哪台服务实例”。
+            ServiceInstance targetInstance = selectServiceInstance(request, triedInstances);
+            triedInstances.add(targetInstance);
+            // 重试时换一个新的 requestId，避免和第一次请求的挂起 future 冲突。
+            RpcRequest attemptRequest = copyRequestWithNewIdIfNeeded(request, attempt);
+            CompletableFuture<RpcResponse> future = new CompletableFuture<>();
+            // Day4 这里不只保存 future，还顺手记住“它发往哪个实例”。
+            // 这样某条连接断开时，只清理属于该实例的挂起请求，不误伤其他实例。
+            pendingRequests.put(attemptRequest.getRequestId(), new PendingRequest(future, endpointKey(targetInstance)));
+            try {
+                Channel activeChannel = ensureConnected(targetInstance);
+                activeChannel.writeAndFlush(attemptRequest).sync();
+                // 经过编码和前置长度头之后，真正进入网络：
+                // 现在数据已经变成：[4字节长度][请求体字节]
+                //接下来这段不是你自己写的 Java 业务代码，而是：
+                //- Netty
+                //- Java NIO
+                //- 操作系统 Socket
+                //- TCP 协议栈
+                //- 网卡
+                //共同完成的。
+                RpcResponse response = future.get(RESPONSE_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+                successRequests.incrementAndGet();
+                return response;
+            } catch (TimeoutException e) {
+                pendingRequests.remove(attemptRequest.getRequestId());
+                timeoutRequests.incrementAndGet();
+                failedRequests.incrementAndGet();
+                throw new RuntimeException("远程调用超时", e);
+            } catch (ExecutionException e) {
+                pendingRequests.remove(attemptRequest.getRequestId());
+                failedRequests.incrementAndGet();
+                throw new RuntimeException("远程调用失败", e.getCause());
+            } catch (InterruptedException e) {
+                pendingRequests.remove(attemptRequest.getRequestId());
+                failedRequests.incrementAndGet();
+                Thread.currentThread().interrupt();
+                throw new RuntimeException("远程调用失败", e);
+            } catch (RuntimeException e) {
+                pendingRequests.remove(attemptRequest.getRequestId());
+                failedRequests.incrementAndGet();
+                lastFailure = e;
+                // 这里只是先记住失败，是否继续重试交给下一轮 for 决定。
+                if (attempt == maxAttempts) {
+                    throw e;
+                }
+            }
         }
+        throw lastFailure == null ? new RuntimeException("远程调用失败") : lastFailure;
     }
 
     public void shutdown() {
-        Channel localChannel = channel;
-        // 优先关闭连接，再关闭线程组，释放网络和线程资源。
-        if (localChannel != null && localChannel.isActive()) {
-            localChannel.close();
+        for (Channel channel : channels.values()) {
+            if (channel != null && channel.isActive()) {
+                channel.close();
+            }
         }
+        channels.clear();
         group.shutdownGracefully();
     }
 
     public ClientStats getStats() {
-        // 返回快照，便于 demo/压测时读取统计数据。
         return new ClientStats(
-                totalRequests.get(),
-                successRequests.get(),
+                totalRequests.get(),                successRequests.get(),
                 failedRequests.get(),
                 timeoutRequests.get()
         );
     }
 
     private Bootstrap createBootstrap() {
-        // 创建一次 Bootstrap，后续连接复用同一个配置。
         Bootstrap newBootstrap = new Bootstrap();
         newBootstrap.group(group)
                 .channel(NioSocketChannel.class)
@@ -134,42 +164,36 @@ public class RpcClient {// 站在调用方视角，把“本地方法调用请�
                     @Override
                     protected void initChannel(SocketChannel ch) {
                         ChannelPipeline pipeline = ch.pipeline();
-                        // 入站：先按长度拆帧，解决粘包半包问题。
                         pipeline.addLast(new LengthFieldBasedFrameDecoder(MAX_FRAME_LENGTH, 0, 4, 0, 4));
-                        // 入站：字节 -> Java 对象。
                         pipeline.addLast(new RpcMessageDecoder());
-
-                        // 出站：Java 对象 -> 字节后，在前面补长度头。
-                        pipeline.addLast(new LengthFieldPrepender(4));
+                        pipeline.addLast(new LengthFieldPrepender(4));// 在消息体前面加 4 个字节，表示“后面的正文长度是多少”
                         pipeline.addLast(new RpcMessageEncoder());
-
-                        // 入站业务处理：按 requestId 回填对应 future。
-                        pipeline.addLast(responseHandler);// 也就是把 RpcClientResponseHandler 注册进去。
+                        pipeline.addLast(new RpcClientResponseHandler(pendingRequests, RpcClient.this::markDisconnected));
                     }
                 });
         return newBootstrap;
     }
 
-    private Channel ensureConnected() {// 多个业务线程会并发调用 sendRequest ，都会进 ensureConnected()
-        Channel localChannel = channel;
-        // 快速路径：已有可用连接直接复用。
+    private Channel ensureConnected(ServiceInstance instance) {
+        String endpointKey = endpointKey(instance);
+        // Day4 的连接缓存不再是“单个 channel”，而是“实例地址 -> channel”。
+        Channel localChannel = channels.get(endpointKey);
         if (localChannel != null && localChannel.isActive()) {
             return localChannel;
         }
-        // 慢速路径：加锁避免并发请求同时触发重复建连。
-        synchronized (connectLock) { // 保证“同一时刻只有一个线程负责建连接”---------------------------------------------------------
-            localChannel = channel;
+        // 每个实例单独一把锁，避免多个线程同时给同一个实例重复建连。
+        Object connectLock = connectLocks.computeIfAbsent(endpointKey, key -> new Object());
+        synchronized (connectLock) {
+            localChannel = channels.get(endpointKey);
             if (localChannel != null && localChannel.isActive()) {
                 return localChannel;
             }
-            // 断连后重试连接，最多尝试 MAX_RECONNECT_RETRIES 次。
             for (int attempt = 1; attempt <= MAX_RECONNECT_RETRIES; attempt++) {
                 try {
-                    Channel newChannel = bootstrap.connect(host, port).sync().channel();
-                    // 连接关闭后清空本地引用，确保下一次请求会触发重连逻辑。
-                    newChannel.closeFuture().addListener(future -> markDisconnected());
-                    channel = newChannel;// 新建连接成功赋值,断连时把 channel 清空
-                    return channel;
+                    Channel newChannel = bootstrap.connect(instance.getHost(), instance.getPort()).sync().channel();
+                    newChannel.closeFuture().addListener(future -> markDisconnected(newChannel));
+                    channels.put(endpointKey, newChannel);
+                    return newChannel;
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
                     throw new RuntimeException("连接服务端失败", e);
@@ -177,7 +201,6 @@ public class RpcClient {// 站在调用方视角，把“本地方法调用请�
                     if (attempt == MAX_RECONNECT_RETRIES) {
                         throw new RuntimeException("连接服务端失败", e);
                     }
-                    // 退避等待后再重试。
                     sleepBackoff();
                 }
             }
@@ -185,12 +208,41 @@ public class RpcClient {// 站在调用方视角，把“本地方法调用请�
         }
     }
 
-    private void markDisconnected() {// 标记 channel 断连
-        // 置空表示“当前无可用连接”。
-        channel = null;
+    private ServiceInstance selectServiceInstance(RpcRequest request, List<ServiceInstance> triedInstances) {
+        if (registryCenter == null) {// - 说明走的是 Day3/直连模式， 就直接返回固定地址实例
+            return new ServiceInstance(request.getInterfaceName(), directHost, directPort);
+        }
+        // discover 的意思是：去注册中心问一句“这个服务现在有哪些可用地址”。
+        List<ServiceInstance> instances = registryCenter.discover(request.getInterfaceName());
+        if (instances.isEmpty()) {
+            throw new RuntimeException("没有发现可用服务实例: " + request.getInterfaceName());
+        }
+        return loadBalancer.select(instances, triedInstances);// 从多个实例里挑一个
     }
 
-    private void sleepBackoff() {// // 每次重连失败后的退避时间，避免瞬时重连风暴。
+    private RpcRequest copyRequestWithNewIdIfNeeded(RpcRequest request, int attempt) {
+        if (attempt == 1) {
+            // 第一次请求直接用原 request。
+            return request;
+        }
+        // 从第二次开始说明进入“重试模式”。
+        // 这里复制出一个新请求对象，并换一个新的 requestId。
+        RpcRequest retryRequest = new RpcRequest();
+        retryRequest.setRequestId(request.getRequestId() + "-retry-" + attempt);
+        retryRequest.setInterfaceName(request.getInterfaceName());
+        retryRequest.setMethodName(request.getMethodName());
+        retryRequest.setParameterTypes(request.getParameterTypes());
+        retryRequest.setArgs(request.getArgs());
+        return retryRequest;
+    }
+
+    private void markDisconnected(Channel channel) {
+        // 某条连接失效后，把它从连接缓存中移除。
+        // 下次如果还想访问这个实例，就会重新建连。
+        channels.entrySet().removeIf(entry -> entry.getValue() == channel);
+    }
+
+    private void sleepBackoff() {
         try {
             Thread.sleep(RECONNECT_BACKOFF_MILLIS);
         } catch (InterruptedException e) {
@@ -198,6 +250,23 @@ public class RpcClient {// 站在调用方视角，把“本地方法调用请�
             throw new RuntimeException("重连等待被中断", e);
         }
     }
+
+    static String endpointKey(ServiceInstance instance) {
+        // 把实例对象统一转成 host:port 形式的字符串 key。
+        return instance.getHost() + ":" + instance.getPort();
+    }
+
+    static String endpointKey(Channel channel) {
+        // 反过来：从一条真实连接上提取出它连的是哪个远端地址。
+        SocketAddress remoteAddress = channel.remoteAddress();
+        if (remoteAddress instanceof InetSocketAddress socketAddress) {
+            return socketAddress.getHostString() + ":" + socketAddress.getPort();
+        }
+        return String.valueOf(remoteAddress);
+    }
+
+    record PendingRequest(CompletableFuture<RpcResponse> future, String endpointKey) {
+    }// 它在表达：这条请求现在还没回来，我不仅要记住“将来用哪个future去唤醒调用方”，还要记住“它是发往哪台服务机器的
 
     public record ClientStats(long totalRequests, long successRequests, long failedRequests, long timeoutRequests) {
     }

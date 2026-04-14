@@ -14,7 +14,7 @@ public class RpcServerRequestHandler extends SimpleChannelInboundHandler<RpcRequ
     }
 
     @Override
-    protected void channelRead0(ChannelHandlerContext ctx, RpcRequest request) { // 服务端收到请求的“业务入口”，它是 Netty 框架在收到入站消息时自动回调的方法。真正收到请求对象的业务入口
+    protected void channelRead0(ChannelHandlerContext ctx, RpcRequest request) { // 服务端收到请求的“业务入口”，它是 Netty 框架在收到入站消息时自动回调的方法。真正收到请求对象的业务入口， 服务端正式拿到“已经被完整解码还原好的 RpcRequest 对象”
         // 这类方法叫“回调方法”（callback），和 Spring 的 Controller 被框架调用是同一思想。
         // 1) 这里拿到的 request 已经是前面的解码器帮你还原好的对象。
         RpcResponse response = rpcServer.invoke(request);// 所以你可以把这一行理解成：Netty 已经帮我把网络中的字节请求变成 RpcRequest 交到我手上了。
