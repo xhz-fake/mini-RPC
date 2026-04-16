@@ -3,13 +3,19 @@ package com.minirpc.demo;
 import com.minirpc.client.RpcClient;
 import com.minirpc.client.RpcClientProxy;
 import com.minirpc.demo.service.HelloService;
-import com.minirpc.registry.FileRegistryCenter;
+import com.minirpc.registry.RegistryCenter;
 import com.minirpc.registry.RandomLoadBalancer;
+import com.minirpc.registry.ZookeeperRegistryCenter;
 
-public class ClientBootstrap {
+public class ClientBootstrap {// 把“注册中心底座”从文件，升级成了真正的中间件 ZooKeeper
     public static void main(String[] args) {
-        // Day4：客户端不再直连固定 IP，而是先通过注册中心发现服务实例。
-        RpcClient rpcClient = new RpcClient(new FileRegistryCenter(), new RandomLoadBalancer()); // - 注册中心：负责查服务在哪 ; 负载均衡器：负责多个实例里挑一个
+        // Day5：客户端继续按服务名发现实例，但底层注册中心已经从本地文件切换成 ZooKeeper。
+        RegistryCenter registryCenter = new ZookeeperRegistryCenter();
+        // 客户端连 ZooKeeper 是为了什么？
+        //- discover(serviceName)
+        //- 查这个服务有哪些实例
+        //- 以后 Day6 还会用来做 watcher / 本地缓存更新
+        RpcClient rpcClient = new RpcClient(registryCenter, new RandomLoadBalancer()); // - 注册中心：负责查服务在哪 ; 负载均衡器：负责多个实例里挑一个
         try {
             RpcClientProxy rpcClientProxy = new RpcClientProxy(rpcClient);
             HelloService helloService = rpcClientProxy.create(HelloService.class);
@@ -19,6 +25,7 @@ public class ClientBootstrap {
             System.out.println(result2);
         } finally {
             rpcClient.shutdown();
+            registryCenter.close();// 关闭客户端和 ZooKeeper 之间的 Curator 连接
         }
     }
 }

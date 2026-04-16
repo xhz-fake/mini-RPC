@@ -3,8 +3,9 @@ package com.minirpc.demo;
 import com.minirpc.client.RpcClient;
 import com.minirpc.client.RpcClientProxy;
 import com.minirpc.demo.service.HelloService;
-import com.minirpc.registry.FileRegistryCenter;
+import com.minirpc.registry.RegistryCenter;
 import com.minirpc.registry.RandomLoadBalancer;
+import com.minirpc.registry.ZookeeperRegistryCenter;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -18,8 +19,9 @@ public class ClientLoadBootstrap {// 作用：跑并发压测/负载测试
     public static void main(String[] args) throws InterruptedException {
         int threadCount = 8;
         int requestsPerThread = 20;
-        // Day4：仍然复用同一个 RpcClient，但目标实例改为通过注册中心发现。
-        RpcClient rpcClient = new RpcClient(new FileRegistryCenter(), new RandomLoadBalancer());
+        // Day5：并发压测入口继续复用同一个 RpcClient，但实例列表已经从 ZooKeeper 中获取。
+        RegistryCenter registryCenter = new ZookeeperRegistryCenter();
+        RpcClient rpcClient = new RpcClient(registryCenter, new RandomLoadBalancer());
         ExecutorService executorService = Executors.newFixedThreadPool(threadCount);
         try {
             RpcClientProxy rpcClientProxy = new RpcClientProxy(rpcClient);
@@ -59,6 +61,7 @@ public class ClientLoadBootstrap {// 作用：跑并发压测/负载测试
         } finally {
             executorService.shutdownNow();
             rpcClient.shutdown();
+            registryCenter.close();
         }
     }
 }

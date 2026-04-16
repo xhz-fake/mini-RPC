@@ -11,4 +11,12 @@
 
     <artifactId>rpc-registry</artifactId>
     <name>rpc-registry</name>
+
+    <dependencies>
+        <dependency>
+            <groupId>org.apache.curator</groupId>
+            <artifactId>curator-framework</artifactId>
+            <version>${curator.version}</version>
+        </dependency>
+    </dependencies>
 </project>

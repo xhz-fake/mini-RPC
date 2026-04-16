@@ -33,7 +33,7 @@ import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicLong;
 
 // RpcClient 的核心职责是维护连接、发送请求、按 requestId 关联响应，并处理超时、断连和连接复用等客户端治理问题。
-public class RpcClient {
+public class RpcClient {// 它做的事只是：-连接 ZooKeeper -询服务节点 -读取子节点 -发现有哪些实例可用
     private static final int MAX_FRAME_LENGTH = 10 * 1024 * 1024;
     private static final long RESPONSE_TIMEOUT_SECONDS = Long.getLong("rpc.client.timeout.seconds", 5L);
     // Day4 最小可用重试次数：默认 2 次（首次 + 1 次重试）。
@@ -100,7 +100,7 @@ public class RpcClient {
                 activeChannel.writeAndFlush(attemptRequest).sync();
                 // 经过编码和前置长度头之后，真正进入网络：
                 // 现在数据已经变成：[4字节长度][请求体字节]
-                //接下来这段不是你自己写的 Java 业务代码，而是：
+                // 接下来这段不是你自己写的 Java 业务代码，而是：
                 //- Netty
                 //- Java NIO
                 //- 操作系统 Socket
@@ -137,7 +137,7 @@ public class RpcClient {
         throw lastFailure == null ? new RuntimeException("远程调用失败") : lastFailure;
     }
 
-    public void shutdown() {
+    public void shutdown() {// 把 RPC 通信层的连接关掉
         for (Channel channel : channels.values()) {
             if (channel != null && channel.isActive()) {
                 channel.close();
