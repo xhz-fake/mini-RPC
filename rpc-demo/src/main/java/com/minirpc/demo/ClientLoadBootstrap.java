@@ -19,7 +19,9 @@ public class ClientLoadBootstrap {// 作用：跑并发压测/负载测试
     public static void main(String[] args) throws InterruptedException {
         int threadCount = 8;
         int requestsPerThread = 20;
-        // Day5：并发压测入口继续复用同一个 RpcClient，但实例列表已经从 ZooKeeper 中获取。
+        // Day6：并发压测入口继续复用同一个 RpcClient，
+        // 但实例列表已经优先从当前 JVM 本地缓存里拿；
+        // ZooKeeper 的 watcher 会在后台持续帮我们刷新这份缓存。
         RegistryCenter registryCenter = new ZookeeperRegistryCenter();
         RpcClient rpcClient = new RpcClient(registryCenter, new RandomLoadBalancer());
         ExecutorService executorService = Executors.newFixedThreadPool(threadCount);

@@ -11,11 +11,11 @@
     <name>mini-rpc</name>
 
     <modules>
-        <module>rpc-core</module>
-        <module>rpc-client</module>
-        <module>rpc-server</module>
-        <module>rpc-registry</module>
-        <module>rpc-demo</module>
+        <module>rpc-core</module><!--放公共协议、编解码、请求响应模型，这些是客户端和服务端都要用的-->
+        <module>rpc-client</module><!--放客户端发送请求、连接管理、响应回填这些逻辑，比如 RpcClient-->
+        <module>rpc-server</module><!--放服务端监听端口、收请求、反射执行，比如 RpcServer-->
+        <module>rpc-registry</module><!--放服务注册与发现，比如 RegistryCenter 和 ZookeeperRegistryCenter-->
+        <module>rpc-demo</module><!--放演示启动类和示例服务，比如 ClientBootstrap 和 ServerBootstrap-->
     </modules>
 
     <properties>

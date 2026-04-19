@@ -213,7 +213,9 @@ public class RpcClient {// 它做的事只是：-连接 ZooKeeper -询服务节�
             return new ServiceInstance(request.getInterfaceName(), directHost, directPort);
         }
         // discover 的意思是：去注册中心问一句“这个服务现在有哪些可用地址”。
-        List<ServiceInstance> instances = registryCenter.discover(request.getInterfaceName());
+        // Day6 以后，这句话背后通常先查的是“当前 JVM 里的本地缓存”，
+        // 只有第一次还没缓存时，才会去 ZooKeeper 拉一份初始数据，并启动 watcher。
+        List<ServiceInstance> instances = registryCenter.discover(request.getInterfaceName());// 多态，调用方法时，会在运行时找到真正的实现类方法执行，面向接口编程
         if (instances.isEmpty()) {
             throw new RuntimeException("没有发现可用服务实例: " + request.getInterfaceName());
         }

@@ -9,12 +9,15 @@ import com.minirpc.registry.ZookeeperRegistryCenter;
 
 public class ClientBootstrap {// 把“注册中心底座”从文件，升级成了真正的中间件 ZooKeeper
     public static void main(String[] args) {
-        // Day5：客户端继续按服务名发现实例，但底层注册中心已经从本地文件切换成 ZooKeeper。
+        // Day6：客户端继续按服务名发现实例，但 discover 背后已经升级为：
+        // 1. 首次从 ZooKeeper 拉取实例列表
+        // 2. 把结果缓存到当前 JVM
+        // 3. 后续靠 watcher 自动刷新缓存
         RegistryCenter registryCenter = new ZookeeperRegistryCenter();
         // 客户端连 ZooKeeper 是为了什么？
         //- discover(serviceName)
         //- 查这个服务有哪些实例
-        //- 以后 Day6 还会用来做 watcher / 本地缓存更新
+        //- Day6 用来做 watcher / 本地缓存更新
         RpcClient rpcClient = new RpcClient(registryCenter, new RandomLoadBalancer()); // - 注册中心：负责查服务在哪 ; 负载均衡器：负责多个实例里挑一个
         try {
             RpcClientProxy rpcClientProxy = new RpcClientProxy(rpcClient);
