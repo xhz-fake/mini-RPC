@@ -3,8 +3,8 @@ package com.minirpc.demo;
 import com.minirpc.client.RpcClient;
 import com.minirpc.client.RpcClientProxy;
 import com.minirpc.demo.service.HelloService;
+import com.minirpc.registry.LoadBalancerFactory;
 import com.minirpc.registry.RegistryCenter;
-import com.minirpc.registry.RandomLoadBalancer;
 import com.minirpc.registry.ZookeeperRegistryCenter;
 
 import java.util.ArrayList;
@@ -17,15 +17,20 @@ import java.util.concurrent.TimeUnit;
 
 public class ClientLoadBootstrap {// 作用：跑并发压测/负载测试
     public static void main(String[] args) throws InterruptedException {
-        int threadCount = 8;
-        int requestsPerThread = 20;
+        int threadCount = Integer.getInteger("rpc.load.threadCount", 8);
+        int requestsPerThread = Integer.getInteger("rpc.load.requestsPerThread", 20);
         // Day6：并发压测入口继续复用同一个 RpcClient，
         // 但实例列表已经优先从当前 JVM 本地缓存里拿；
         // ZooKeeper 的 watcher 会在后台持续帮我们刷新这份缓存。
         RegistryCenter registryCenter = new ZookeeperRegistryCenter();
-        RpcClient rpcClient = new RpcClient(registryCenter, new RandomLoadBalancer());
+        // Day7：压测入口也支持通过 JVM 参数切换负载均衡策略，便于做随机/轮询行为验证。
+        RpcClient rpcClient = new RpcClient(registryCenter, LoadBalancerFactory.fromSystemProperty());
         ExecutorService executorService = Executors.newFixedThreadPool(threadCount);
         try {
+            System.out.println("load config threadCount=" + threadCount
+                    + ", requestsPerThread=" + requestsPerThread
+                    + ", loadBalancer=" + System.getProperty("rpc.loadbalancer", "random")
+                    + ", serializer=" + System.getProperty("rpc.serializer", "jdk"));
             RpcClientProxy rpcClientProxy = new RpcClientProxy(rpcClient);
             HelloService helloService = rpcClientProxy.create(HelloService.class);
 

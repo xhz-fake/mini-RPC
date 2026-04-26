@@ -1,5 +1,6 @@
 package com.minirpc.client;
 
+import com.minirpc.client.exception.RemoteInvocationException;
 import com.minirpc.core.protocol.RpcRequest;
 import com.minirpc.core.protocol.RpcResponse;
 
@@ -33,10 +34,13 @@ public class RpcClientProxy {
             System.out.println("methodName:" + method.getName());
 
             // 2) 发起远程请求并阻塞等待响应。
-            RpcResponse response = rpcClient.sendRequest(request);
+            RpcResponse response = rpcClient.sendRequest(request);// 1.RpcClient.sendRequest() 负责的是通信层拿回 RpcResponse
             // 3) 把服务端错误转换为本地异常，保证调用方能感知失败。
-            if (response.hasError()) {
-                throw new RuntimeException(response.getError());
+            if (response.hasError()) {// 2.但“这个响应是不是业务失败”这件事，是代理层决定的
+                //- 服务端哪怕业务报错，只要它能正常把错误封装进 RpcResponse
+                //- 从通信层角度，这次请求其实是“成功收到了响应”
+                //- 只是这个响应里带的是业务错误而不是业务数据
+                throw new RemoteInvocationException(response.getError());//所以这里不能把它当成 RpcConnectionException 或 RpcTimeoutException必须单独区分成 RemoteInvocationException
             }
             // 4) 成功时返回响应数据，行为上等价于本地方法返回值。
             return response.getData();

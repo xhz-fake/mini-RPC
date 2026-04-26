@@ -16,6 +16,7 @@ import io.netty.channel.socket.nio.NioServerSocketChannel;
 import io.netty.handler.codec.LengthFieldBasedFrameDecoder;
 import io.netty.handler.codec.LengthFieldPrepender;
 
+import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 // RpcServer 的核心职责是监听端口、接收请求、根据接口名和方法签名定位服务实现，通过反射执行业务方法，再把执行结果封装成响应返回给客户端。
 public class RpcServer {// 站在服务提供方视角，接收请求、找到目标服务、执行方法、返回结果，关心两件事：1.我监听哪个端口 2.我能提供哪些服务
@@ -90,9 +91,18 @@ public class RpcServer {// 站在服务提供方视角，接收请求、找到�
             // 把方法返回值写入响应体，供客户端恢复成本地返回值。
             response.setData(result);
             return response;
-        } catch (Exception e) {
+        } catch (Exception e) {// Day7：如果业务方法自己抛异常，反射层通常会包一层 InvocationTargetException。
+            // 这里把真正的业务异常原因展开后再写回客户端，错误语义会更清楚。
+            Throwable actualException = e instanceof InvocationTargetException invocationTargetException
+                    && invocationTargetException.getTargetException() != null
+                    ? invocationTargetException.getTargetException()
+                    : e;
+            String errorMessage = actualException.getMessage();
+            if (errorMessage == null || errorMessage.isBlank()) {
+                errorMessage = actualException.getClass().getSimpleName();
+            }
             // 统一把异常信息写入 error 字段，客户端据此抛错。
-            response.setError(e.getMessage());
+            response.setError(errorMessage);// 服务端把错误写进 RpcResponse.error
             return response;
         }
     }

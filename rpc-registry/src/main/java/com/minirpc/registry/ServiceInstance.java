@@ -32,7 +32,7 @@ public final class ServiceInstance {// 是一个 地址说明书
         return host + ":" + port;
     }
 
-    @Override// 不懂
+    @Override
     // equals 的作用是判断“两个实例是不是同一个实例”。
     // 这里要求 serviceName、host、port 三者都相同，才算同一个实例。
     // 这样做的原因是：Day4 重试时要排除“本次已经试过的实例”，

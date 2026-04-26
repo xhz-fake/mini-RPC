@@ -1,34 +1,24 @@
 package com.minirpc.core.codec;
 
-import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
-import java.io.IOException;
-import java.io.ObjectInputStream;
-import java.io.ObjectOutputStream;
+import com.minirpc.core.codec.serialization.Serializer;
+import com.minirpc.core.codec.serialization.SerializerFactory;
 
 public final class RpcMessageCodec {
     private RpcMessageCodec() {
     }
 
     public static byte[] encode(Object obj) {
-        try (ByteArrayOutputStream bos = new ByteArrayOutputStream();
-             ObjectOutputStream oos = new ObjectOutputStream(bos)) {
-            // Day1 先使用 JDK 原生序列化，重点在“跑通链路”，后续再替换更高性能方案。
-            oos.writeObject(obj);
-            oos.flush();
-            return bos.toByteArray();// 这一步之后，数据已经不再是 Java 对象形态了，而是：一串字节数组 byte[]
-        } catch (IOException e) {
-            throw new RuntimeException("编码失败", e);
-        }
+        // Day7：不再把序列化方式写死在这里，而是交给 SerializerFactory 按配置选择。
+        // 这样后面要切 JDK / JSON，甚至继续扩展其他实现时，编解码主链不需要重写。
+        Serializer serializer = SerializerFactory.getConfiguredSerializer();
+        // 注意：这里每次 encode/decode 都是“先看当前配置，再拿对应实现”。
+        // 这样客户端和服务端只要 JVM 参数保持一致，就会使用同一套序列化策略。
+        return serializer.serialize(obj);// 这一步之后，数据已经不再是 Java 对象形态了，而是：一串字节数组 byte[]
     }
 
     public static Object decode(byte[] bytes) {
-        try (ByteArrayInputStream bis = new ByteArrayInputStream(bytes);
-             ObjectInputStream ois = new ObjectInputStream(bis)) {
-            // 把网络字节还原成 Java 对象，客户端和服务端都依赖这一步。
-            return ois.readObject(); // 把网络字节还原成 Java 对象
-        } catch (IOException | ClassNotFoundException e) {
-            throw new RuntimeException("解码失败", e);
-        }
+        Serializer serializer = SerializerFactory.getConfiguredSerializer();
+        // 把网络字节还原成 Java 对象，客户端和服务端都依赖这一步。
+        return serializer.deserialize(bytes); // 把网络字节还原成 Java 对象
     }
 }

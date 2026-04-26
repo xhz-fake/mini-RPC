@@ -3,8 +3,8 @@ package com.minirpc.demo;
 import com.minirpc.client.RpcClient;
 import com.minirpc.client.RpcClientProxy;
 import com.minirpc.demo.service.HelloService;
+import com.minirpc.registry.LoadBalancerFactory;
 import com.minirpc.registry.RegistryCenter;
-import com.minirpc.registry.RandomLoadBalancer;
 import com.minirpc.registry.ZookeeperRegistryCenter;
 
 public class ClientBootstrap {// 把“注册中心底座”从文件，升级成了真正的中间件 ZooKeeper
@@ -18,7 +18,8 @@ public class ClientBootstrap {// 把“注册中心底座”从文件，升级�
         //- discover(serviceName)
         //- 查这个服务有哪些实例
         //- Day6 用来做 watcher / 本地缓存更新
-        RpcClient rpcClient = new RpcClient(registryCenter, new RandomLoadBalancer()); // - 注册中心：负责查服务在哪 ; 负载均衡器：负责多个实例里挑一个
+        // Day7：默认可通过 -Drpc.loadbalancer=random / round_robin 切换负载均衡策略。
+        RpcClient rpcClient = new RpcClient(registryCenter, LoadBalancerFactory.fromSystemProperty()); // 具体的负载均衡器的选择由 JVM 参数 rpc.loadbalancer 里取，比如 -Drpc.loadbalancer=rr
         try {
             RpcClientProxy rpcClientProxy = new RpcClientProxy(rpcClient);
             HelloService helloService = rpcClientProxy.create(HelloService.class);

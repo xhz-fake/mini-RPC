@@ -9,6 +9,15 @@ import com.minirpc.server.RpcServer;
 import com.minirpc.server.ServiceRegistry;
 
 public class ServerBootstrap {
+    // - 你现在可以把 Day7 整体理解成这样一条执行链:
+    //- 1.客户端代理先把本地方法调用包装成 RpcRequest
+    //- 2.RpcClient 先去注册中心发现实例，再通过负载均衡策略选出本次目标机器
+    //- 3.选中目标实例后，客户端通过 Netty 把请求对象编码成字节并发出去
+    //- 4.服务端收到后解码成 RpcRequest ，执行业务，再把 RpcResponse 编码返回
+    //- 5.客户端收到响应后，按 requestId 唤醒等待线程
+    //- 6.如果链路中出错，客户端会把失败按服务发现、连接、超时、远端业务等语义进行分类
+    //- 7.最后，这些行为通过单元测试和集成测试被一一验证
+
     public static void main(String[] args) {
         String host = System.getProperty("rpc.server.host", "127.0.0.1");
         int port = Integer.getInteger("rpc.server.port", 9000);// 1. 决定服务实例要监听的地址
