@@ -362,3 +362,105 @@ Day7 之后：
 - 端到端链路是否在新设计下依然跑通
 
 这类测试特别适合在面试时展示工程化思维。
+
+### 10.6 `fromSystemProperty()` 和“工厂方法”到底是什么关系
+
+`LoadBalancerFactory` 是工厂类，`create(strategy)` 和 `fromSystemProperty()` 都是工厂方法。
+
+区别在于：
+
+- `create(strategy)`：调用方显式传入策略名，适合测试和代码内部精确控制
+- `fromSystemProperty()`：先从 JVM 参数里读取配置，再转调 `create(...)`
+
+所以它们不是互相替代关系，而是：
+
+- `create(...)` 负责“按给定策略创建对象”
+- `fromSystemProperty()` 负责“把运行时配置翻译成策略对象”
+
+### 10.7 为什么这里用静态工厂，而不是 `new LoadBalancerFactory()`
+
+因为 `LoadBalancerFactory` 本身不保存状态，只做一件事：根据输入返回一个具体策略对象。
+
+做成静态方法的好处是：
+
+- 语义上更像“工具型创建入口”
+- 调用更直接，不需要为了无状态逻辑额外 new 一个工厂对象
+- 测试和使用都更轻量
+
+这也是很多框架里常见的写法，比如各种 `of(...)`、`from(...)`、`create(...)`。
+
+### 10.8 单实例下做负载均衡，会不会显得没价值
+
+单实例时，负载均衡在运行结果上确实“选谁都一样”，因为候选实例只有一个。
+
+但它依然有价值，因为项目要表达的是：
+
+- 实例选择逻辑已经从业务代码里抽离
+- 客户端已经具备面向多实例扩展的结构
+- 后续从 1 个实例扩到 2 个、3 个时，上层调用代码不用重写
+
+也就是说，单实例阶段主要验证的是“设计是否成立”，多实例阶段验证的才是“策略效果是否可见”。
+
+### 10.9 `RpcClient` 里的构造器写法算不算构造器委托
+
+算。
+
+像下面这种：
+
+- `RpcClient(String host, int port)` 委托给私有总构造器
+- `RpcClient(RegistryCenter registryCenter, LoadBalancer loadBalancer)` 也委托给私有总构造器
+
+本质上就是把不同入口统一收敛到一个“最终初始化点”。
+
+这样做的好处是：
+
+- 避免多个构造器里重复写初始化逻辑
+- 直连模式和注册中心模式共用同一套底层初始化流程
+- 默认值设置更集中，比如默认负载均衡策略就在总构造器里收敛
+
+### 10.10 `channelInactive()` 和 `exceptionCaught()` 为什么没人手动调，却会执行
+
+它们和 `channelRead0()` 一样，都是 Netty 的事件回调。
+
+调用逻辑不是“你手动调用”，而是：
+
+1. 这个 handler 被注册进 `ChannelPipeline`
+2. Netty 底层检测到某个事件
+3. 框架自动沿 pipeline 分发对应事件
+4. 命中后回调你的重写方法
+
+三者分别对应：
+
+- `channelRead0()`：收到并解码出一条入站消息
+- `channelInactive()`：连接从 active 变成 inactive
+- `exceptionCaught()`：pipeline 某处抛出了未处理异常
+
+所以 Day7 里它们的重要意义是：
+
+- 收到响应时完成对应 future
+- 连接断开时批量失败回填 pending 请求
+- 出现异常时尽快 fail fast，避免调用线程一直挂住
+
+### 10.11 为什么 `JsonSerializer` 要配置默认类型信息
+
+因为 JSON 本身不像 JDK 序列化那样天然保留 Java 运行时类型。
+
+如果只是把对象写成普通 JSON，再按 `Object.class` 读回来，很容易出现：
+
+- 反序列化后拿到的是 `LinkedHashMap`
+- `args` 里的元素类型丢失
+- `RpcRequest` / `RpcResponse` 里的复杂字段无法还原成原本类型
+
+所以这里通过 Jackson 的默认类型信息，让 JSON 在“可读”的同时，也能保留足够的运行时类型，保证 RPC 两端能把对象还原回来。
+
+### 10.12 为什么 JDK 序列化测试最初只有 `RpcRequest`，后来又补了 `RpcResponse`
+
+最开始只测 `RpcRequest`，主要是因为它字段更多，更能代表“复杂对象能不能 round-trip”。
+
+但从测试完整性角度看，补上 `RpcResponse` 更好，因为这能把“请求对象”和“响应对象”两条方向都覆盖到。
+
+所以后续补一个：
+
+- `jdkSerializerShouldRoundTripRpcResponse()`
+
+是很合理的增强，不是为了凑测试数量，而是为了让测试结构更对称、更完整。
